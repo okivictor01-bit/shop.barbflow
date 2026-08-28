@@ -9,7 +9,11 @@ const BANKS = [
   { code: "011", name: "First Bank of Nigeria" },
   { code: "214", name: "First City Monument Bank" },
   { code: "058", name: "Guaranty Trust Bank" },
+  { code: "50211", name: "Kuda Bank" },
   { code: "082", name: "Keystone Bank" },
+  { code: "50515", name: "Moniepoint Microfinance Bank" },
+  { code: "999992", name: "OPay" },
+  { code: "999991", name: "PalmPay" },
   { code: "076", name: "Polaris Bank" },
   { code: "221", name: "Stanbic IBTC Bank" },
   { code: "232", name: "Sterling Bank" },
@@ -29,6 +33,8 @@ export default function SettingsTab({ shop, onShopUpdated }) {
   const [bankCode, setBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [accountName, setAccountName] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState(null);
   const [savingBank, setSavingBank] = useState(false);
   const [bankMessage, setBankMessage] = useState(null);
   const [bankError, setBankError] = useState(null);
@@ -37,6 +43,14 @@ export default function SettingsTab({ shop, onShopUpdated }) {
   useEffect(() => {
     loadPayoutAccount();
   }, []);
+
+  useEffect(() => {
+    if (!bankCode || accountNumber.length !== 10) return;
+
+    const timeout = setTimeout(() => resolveAccountName(), 500);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bankCode, accountNumber]);
 
   async function loadPayoutAccount() {
     const {
@@ -55,6 +69,41 @@ export default function SettingsTab({ shop, onShopUpdated }) {
       setAccountName(data.account_name);
     }
     setLoadingAccount(false);
+  }
+
+  async function resolveAccountName() {
+    setResolving(true);
+    setResolveError(null);
+    setAccountName("");
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/resolve-bank-account`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ account_number: accountNumber, bank_code: bankCode }),
+        }
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        setResolveError(data.error ?? "Could not resolve account name.");
+        return;
+      }
+      setAccountName(data.account_name);
+    } catch (err) {
+      setResolveError("Could not reach the verification service. You can enter the name manually.");
+    } finally {
+      setResolving(false);
+    }
   }
 
   async function handleShopSave(e) {
@@ -164,7 +213,16 @@ export default function SettingsTab({ shop, onShopUpdated }) {
           <form onSubmit={handleBankSave}>
             <div className="field">
               <label htmlFor="bank">Bank</label>
-              <select id="bank" value={bankCode} onChange={(e) => setBankCode(e.target.value)} required>
+              <select
+                id="bank"
+                value={bankCode}
+                onChange={(e) => {
+                  setBankCode(e.target.value);
+                  setAccountName("");
+                  setResolveError(null);
+                }}
+                required
+              >
                 <option value="">Select your bank</option>
                 {BANKS.map((b) => (
                   <option key={b.code} value={b.code}>
@@ -179,24 +237,47 @@ export default function SettingsTab({ shop, onShopUpdated }) {
               <input
                 id="accountNumber"
                 value={accountNumber}
-                onChange={(e) => setAccountNumber(e.target.value)}
+                onChange={(e) => {
+                  setAccountNumber(e.target.value.replace(/\D/g, ""));
+                  setAccountName("");
+                  setResolveError(null);
+                }}
                 maxLength={10}
                 required
               />
             </div>
 
             <div className="field">
-              <label htmlFor="accountName">Account name</label>
+              <label htmlFor="accountName">
+                Account name{" "}
+                {resolving && (
+                  <span style={{ opacity: 0.6, fontWeight: 400 }}>— verifying…</span>
+                )}
+              </label>
               <input
                 id="accountName"
                 value={accountName}
                 onChange={(e) => setAccountName(e.target.value)}
-                placeholder="As it appears on your bank account"
+                placeholder={
+                  resolving
+                    ? "Looking up account name…"
+                    : "Enter bank + account number to auto-fill"
+                }
                 required
               />
+              {resolveError && (
+                <p className="error-text" style={{ marginTop: 6 }}>
+                  {resolveError}
+                </p>
+              )}
+              {!resolving && !resolveError && accountName && (
+                <p className="success-text" style={{ marginTop: 6 }}>
+                  Verified against {BANKS.find((b) => b.code === bankCode)?.name}.
+                </p>
+              )}
             </div>
 
-            <button type="submit" className="btn btn-primary" disabled={savingBank}>
+            <button type="submit" className="btn btn-primary" disabled={savingBank || resolving}>
               {savingBank ? "Saving…" : "Save payout account"}
             </button>
 
